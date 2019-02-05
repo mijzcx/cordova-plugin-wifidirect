@@ -1,0 +1,564 @@
+package com.mijzcx.cordova.plugin;
+
+import org.apache.cordova.PluginResult;
+import org.apache.cordova.CallbackContext;
+import org.apache.cordova.CordovaPlugin;
+import org.apache.cordova.CordovaInterface;
+import org.apache.cordova.CordovaWebView;
+
+import org.json.JSONObject;
+import org.json.JSONArray;
+import org.json.JSONException;
+
+import android.util.*;
+import android.content.Context;
+import android.net.wifi.WifiManager;
+import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.p2p.WifiP2pManager.Channel;
+
+import android.net.wifi.p2p.WifiP2pManager.PeerListListener;
+import android.net.wifi.p2p.WifiP2pDeviceList;
+import android.net.wifi.p2p.WifiP2pInfo;
+import android.net.wifi.p2p.WifiP2pManager.ConnectionInfoListener;
+import android.net.wifi.p2p.WifiP2pDevice;
+import android.net.wifi.p2p.WifiP2pConfig;
+
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.app.Activity;
+import android.os.Looper;
+import android.os.Handler;
+import android.os.Message;
+import android.net.NetworkInfo;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.ServerSocket;
+import java.lang.Thread;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Collection;
+
+public class WifiDirect extends CordovaPlugin {
+
+  public static final String LOG_TITLE = "chromium";
+
+  private WifiManager mWifiManager;
+  private WifiP2pManager mManager;
+  private Channel mChannel;
+  private Activity mActivity;
+  private IntentFilter mIntentFilter;
+  private WifiBroadcastReceiver mReceiver;
+
+  @Override
+  public void onReset() {
+    super.onReset();
+    mActivity.unregisterReceiver(mReceiver);
+    mActivity.registerReceiver(mReceiver, mIntentFilter);
+  }
+
+  @Override
+  public void onDestroy() {
+    super.onDestroy();
+    mActivity.unregisterReceiver(mReceiver);
+  }
+
+  @Override
+  public void initialize(CordovaInterface cordova, CordovaWebView webView) {
+    super.initialize(cordova, webView);
+
+    if (mActivity == null) {
+      mActivity = cordova.getActivity();
+    }
+
+    if (mIntentFilter == null) {
+      mIntentFilter = new IntentFilter();
+      mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
+      mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
+      mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
+    }
+
+    if (mManager == null) {
+      mManager = (WifiP2pManager) mActivity.getSystemService(Context.WIFI_P2P_SERVICE);
+    }
+
+    if (mChannel == null) {
+      mChannel = mManager.initialize(mActivity, Looper.getMainLooper(), null);
+    }
+
+    if (mWifiManager == null) {
+      mWifiManager = (WifiManager) mActivity.getSystemService(Context.WIFI_SERVICE);
+    }
+
+    if (mReceiver == null) {
+      mReceiver = new WifiBroadcastReceiver(mManager, mChannel);
+      mActivity.registerReceiver(mReceiver, mIntentFilter);
+    }
+
+  }
+
+  private void wifiStatusMessage(boolean isActive, CallbackContext ctx) {
+    try {
+      JSONObject resp = new JSONObject();
+      resp.put("type", "wifiStatus");
+      resp.put("isActive", isActive);
+      PluginResult res = new PluginResult(PluginResult.Status.OK, resp);
+      res.setKeepCallback(true);
+      ctx.sendPluginResult(res);
+    } catch (JSONException e) {
+      ctx.error("Error encountered: " + e.getMessage());
+    }
+  }
+
+  private void wifiStatus(CallbackContext ctx) {
+    Log.i(LOG_TITLE, "wifiStatus");
+    init(ctx);
+    wifiStatusMessage(mWifiManager.isWifiEnabled(), ctx);
+  }
+
+  private void activateWifi(Boolean activate, CallbackContext ctx) {
+    Log.i(LOG_TITLE, "activateWifi");
+    init(ctx);
+    mWifiManager.setWifiEnabled(activate);
+  }
+
+  private void onSuccessMessage(CallbackContext ctx, String type, Object message) {
+    try {
+      JSONObject resp = new JSONObject();
+      resp.put("type", type);
+      resp.put("message", message);
+      PluginResult res = new PluginResult(PluginResult.Status.OK, resp);
+      res.setKeepCallback(true);
+      ctx.sendPluginResult(res);
+    } catch (JSONException e) {
+      ctx.error("Error encountered: " + e.getMessage());
+    }
+  }
+
+  private void discoverPeers(final CallbackContext ctx) {
+    Log.i(LOG_TITLE, "discoverPeers");
+    init(ctx);
+
+    mManager.stopPeerDiscovery(mChannel, null);
+    mManager.discoverPeers(mChannel, new WifiP2pManager.ActionListener() {
+      @Override
+      public void onSuccess() {
+        mapWifiP2pDevices.clear();
+        onSuccessMessage(ctx, "discoverPeers:onSuccess", "Discovery Started");
+      }
+
+      @Override
+      public void onFailure(int id) {
+        ctx.error("Discovery Failed " + id);
+      }
+    });
+  }
+
+  private void stopDiscoverPeers(final CallbackContext ctx) {
+    Log.i(LOG_TITLE, "stopDiscoverPeers");
+    init(ctx);
+
+    mManager.stopPeerDiscovery(mChannel, new WifiP2pManager.ActionListener() {
+      @Override
+      public void onSuccess() {
+        onSuccessMessage(ctx, "stopDiscoverPeers:onSuccess", "Discovery Stopped");
+      }
+
+      @Override
+      public void onFailure(int id) {
+        ctx.error("Discovery Failed " + id);
+      }
+    });
+  }
+
+  private void connectToPeer(String peerName, String peerAddress, CallbackContext ctx) {
+    Log.i(LOG_TITLE, "connectToPeer");
+
+    init(ctx);
+    WifiP2pConfig config = new WifiP2pConfig();
+    config.deviceAddress = peerAddress;
+
+    mManager.connect(mChannel, config, new WifiP2pManager.ActionListener() {
+      @Override
+      public void onSuccess() {
+        onSuccessMessage(ctx, "connectToPeer:onSuccess", "Connected to " + peerName);
+      }
+
+      @Override
+      public void onFailure(int id) {
+        ctx.error("Connect Failed " + id);
+      }
+    });
+  }
+
+  private Map<String, WifiP2pDevice> mapWifiP2pDevices = new HashMap<String, WifiP2pDevice>();
+
+  private void setMapPeerList(Collection<WifiP2pDevice> iPeerList) {
+    mapWifiP2pDevices.clear();
+
+    for (WifiP2pDevice device : iPeerList) {
+      String key = device.deviceName + ":" + device.deviceAddress;
+      mapWifiP2pDevices.put(key, device);
+    }
+  }
+
+  private WifiP2pDevice getWifiP2pDevice(String peerName, String peerAddress) {
+    String key = peerName + ":" + peerAddress;
+    return mapWifiP2pDevices.get(key);
+  }
+
+  private void disconnectPeer(String peerName, String peerAddress, CallbackContext ctx) {
+    Log.i(LOG_TITLE, "disconnectPeer");
+
+    init(ctx);
+
+    WifiP2pManager.ActionListener listener  = new WifiP2pManager.ActionListener() {
+      @Override
+      public void onSuccess() {
+        onSuccessMessage(ctx, "disconnectPeer:onSuccess", "Disconnect " + peerName);
+      }
+
+      @Override
+      public void onFailure(int id) {
+        ctx.error("Connect Failed " + id);
+      }
+    };
+
+    WifiP2pDevice mWifiP2pDevice = getWifiP2pDevice(peerName, peerAddress);
+
+    if (mManager != null) {
+      if ((mWifiP2pDevice == null)
+        || (mWifiP2pDevice.status == WifiP2pDevice.CONNECTED)) {
+        if (mChannel != null) {
+          mManager.removeGroup(mChannel, listener);
+        }
+      } else if (mWifiP2pDevice.status == WifiP2pDevice.AVAILABLE
+        || mWifiP2pDevice.status == WifiP2pDevice.INVITED) {
+          mManager.cancelConnect(mChannel, listener);
+      }
+    }
+  }
+
+  private void sendMessage(String message, CallbackContext ctx) {
+    Log.i(LOG_TITLE, "sendMessage");
+    init(ctx);
+
+    if (sendReceiveThread != null) {
+      sendReceiveThread.write(message.getBytes());
+    }
+  }
+
+  @Override
+  public boolean execute(String action, JSONArray args, CallbackContext ctx) throws JSONException {
+
+    if (action.equals("wifiStatus")) {
+      wifiStatus(ctx);
+      return true;
+    }
+    else if (action.equals("activateWifi")) {
+      JSONObject opt = args.getJSONObject(0);
+      Boolean activate = opt.getBoolean("activate");
+      activateWifi(activate, ctx);
+      return true;
+    }
+    else if (action.equals("discoverPeers")) {
+      discoverPeers(ctx);
+      return true;
+    }
+    else if (action.equals("stopDiscoverPeers")) {
+      stopDiscoverPeers(ctx);
+      return true;
+    }
+    else if (action.equals("connectToPeer")) {
+      JSONObject opt = args.getJSONObject(0);
+      String peerName = opt.getString("peerName");
+      String peerAddress = opt.getString("peerAddress");
+      connectToPeer(peerName, peerAddress, ctx);
+      return true;
+    }
+    else if (action.equals("disconnectPeer")) {
+      JSONObject opt = args.getJSONObject(0);
+      String peerName = opt.getString("peerName");
+      String peerAddress = opt.getString("peerAddress");
+      disconnectPeer(peerName, peerAddress, ctx);
+      return true;
+    }
+    else if (action.equals("sendMessage")) {
+      JSONObject opt = args.getJSONObject(0);
+      String message = opt.getString("message");
+      sendMessage(message, ctx);
+      return true;
+    } else {
+        return false;
+    }
+  }
+
+  private void init(CallbackContext cb) {
+    mReceiver.setCallbackContext(cb);
+  }
+
+  private class WifiBroadcastReceiver extends BroadcastReceiver {
+
+    private CallbackContext cb;
+    private WifiP2pManager manager;
+    private Channel channel;
+    private Handler handler; 
+    public WifiBroadcastReceiver(WifiP2pManager manager, Channel channel) {
+      super();
+      this.manager = manager;
+      this.channel = channel;
+      this.handler = createHandler(); 
+    }
+
+    public void setCallbackContext(CallbackContext cb) {
+      this.cb = cb;
+    }
+
+    private void peerListMessage() {
+      try {
+        JSONObject resp = new JSONObject();
+        resp.put("type", "peerList");
+
+        JSONArray peers = new JSONArray();
+
+        for (WifiP2pDevice device : mapWifiP2pDevices.values()) {
+          JSONObject o = new JSONObject();
+          o.put("name", device.deviceName);
+          o.put("address", device.deviceAddress);
+          peers.put(o);
+        }
+
+        resp.put("peers", peers);
+        PluginResult res = new PluginResult(PluginResult.Status.OK, resp);
+        res.setKeepCallback(true);
+        cb.sendPluginResult(res);
+      } catch (JSONException e) {
+        cb.error("Error encountered: " + e.getMessage());
+      }
+    }
+
+    private void isConnectedMessage(String message) {
+      try {
+        JSONObject resp = new JSONObject();
+        resp.put("type", "isConnected");
+        resp.put("message", message);
+        PluginResult res = new PluginResult(PluginResult.Status.OK, resp);
+        res.setKeepCallback(true);
+        cb.sendPluginResult(res);
+      } catch (JSONException e) {
+        cb.error("Error encountered: " + e.getMessage());
+      }
+    }
+
+    private boolean isAllKeysExists(Collection<WifiP2pDevice> iPeerList) {
+
+      boolean retval = true;
+      for (WifiP2pDevice peer : iPeerList) {
+        String key = peer.deviceName + ":" + peer.deviceAddress;
+        retval = retval && (mapWifiP2pDevices.get(key) != null);
+      }
+
+      return retval;
+    }
+
+    private Handler createHandler() {
+      return new Handler(new Handler.Callback() {
+        @Override
+        public boolean handleMessage(Message msg) {
+          switch (msg.what) {
+            case MESSAGE_READ: 
+              byte[] readBuff = (byte[]) msg.obj;
+              String message = new String(readBuff, 0, msg.arg1);
+    
+              try {
+                JSONObject resp = new JSONObject();
+                resp.put("type", "sendMessage");
+                resp.put("message", message);
+  
+                PluginResult res = new PluginResult(PluginResult.Status.OK, resp);
+                res.setKeepCallback(true);
+                cb.sendPluginResult(res);
+              } catch (JSONException e) {
+                cb.error("Error encountered: " + e.getMessage());
+              }
+
+              break;
+          }
+    
+          return true;
+        }
+      });
+
+    }
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+      String action = intent.getAction();
+
+      if (action.equals(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)) {
+        try {
+          int state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1);
+
+          JSONObject retval = new JSONObject();
+          if (state == WifiP2pManager.WIFI_P2P_STATE_ENABLED) {
+            retval.put("isActive", mWifiManager.isWifiEnabled());  
+          } else {
+            retval.put("isActive", mWifiManager.isWifiEnabled());
+          }
+
+          PluginResult res = new PluginResult(PluginResult.Status.OK, retval);
+          res.setKeepCallback(true);
+          cb.sendPluginResult(res);
+        } catch (JSONException e) {
+          cb.error("Error encountered: " + e.getMessage());
+        }
+      }
+      else if (action.equals(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)) {
+
+        if (manager == null) return;
+
+        manager.requestPeers(channel, new PeerListListener() {
+
+          @Override
+          public void onPeersAvailable(WifiP2pDeviceList peerList) {
+
+            Collection<WifiP2pDevice> iPeerList = peerList.getDeviceList();
+
+            if (!isAllKeysExists(iPeerList)) {
+              setMapPeerList(iPeerList);
+              peerListMessage();
+            }
+
+          }
+        });
+      }
+      else if (action.equals(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)) {
+        if (manager == null) return;
+
+        // Respond to new connection or disconnection
+        NetworkInfo networkInfo = intent.getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO);
+        if (networkInfo.isConnected()) {
+          manager.requestConnectionInfo(channel, new ConnectionInfoListener() {
+            @Override
+            public void onConnectionInfoAvailable(WifiP2pInfo wifiP2pInfo) {
+              final InetAddress groupOwnerAddress = wifiP2pInfo.groupOwnerAddress;
+              
+              if (wifiP2pInfo.groupFormed && wifiP2pInfo.isGroupOwner) {
+                isConnectedMessage("Host");
+                serverThread = new ServerThread(handler);
+                serverThread.start();                 
+              } else if (wifiP2pInfo.groupFormed) {
+                isConnectedMessage("Client");
+                clientThread = new ClientThread(groupOwnerAddress, handler);
+                clientThread.start();      
+              }
+            }
+          });
+        } else {
+          isConnectedMessage("Device disconnected");
+        }
+      }
+    }
+  }
+
+  private static final int PORT = 8888;
+
+  public class ServerThread extends Thread {
+    Socket socket;
+    ServerSocket serverSocket;
+    Handler handler;
+
+    public ServerThread(Handler handler) {
+      this.handler = handler;
+    }
+
+    @Override
+    public void run() {
+      try {
+        serverSocket = new ServerSocket(PORT);
+        socket = serverSocket.accept();
+        sendReceiveThread = new SendReceiveThread(socket, handler);
+        sendReceiveThread.start();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+  }
+
+  public class ClientThread extends Thread {
+    Socket socket;
+    String hostAdd;
+    Handler handler;
+
+    public ClientThread(InetAddress hostAddress, Handler handler) {
+      this.handler = handler;
+      hostAdd = hostAddress.getHostAddress();
+      socket = new Socket();
+    }
+
+    @Override
+    public void run() {
+      try {
+        socket.connect(new InetSocketAddress(hostAdd, PORT), 500);
+        sendReceiveThread = new SendReceiveThread(socket, handler);
+        sendReceiveThread.start();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+  }
+
+  private static final int MESSAGE_READ = 1;
+  private ServerThread serverThread;
+  private ClientThread clientThread;
+  private SendReceiveThread sendReceiveThread;
+
+  public class SendReceiveThread extends Thread {
+    private Socket socket;
+    private InputStream inputStream;
+    private OutputStream outputStream;
+    private Handler handler;
+
+    public SendReceiveThread(Socket socket, Handler handler) {
+      this.socket = socket;
+      this.handler = handler;
+      try {
+        inputStream = socket.getInputStream();
+        outputStream = socket.getOutputStream();
+
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+
+    public void write(byte[] bytes) {
+      try {
+        outputStream.write(bytes);
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+
+    @Override
+    public void run() {
+      byte[] buffer = new byte[1024];
+      int bytes;
+
+      while (socket != null) {
+        try {
+          bytes = inputStream.read(buffer);
+          if (bytes > 0) {
+            handler.obtainMessage(MESSAGE_READ, bytes, -1, buffer).sendToTarget();
+          }
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }
+  }
+}

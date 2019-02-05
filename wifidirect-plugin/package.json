@@ -1,0 +1,13 @@
+{
+  "name": "cordova-plugin-wifidirect",
+  "version": "0.1.0",
+  "description": "Cordova Plugin WifiDirect",
+  "cordova": {
+    "id": "cordova-plugin-wifidirect",
+    "platforms": [
+      "android"
+    ]
+  },
+  "author": "Melvin R. Zamora",
+  "license": "Apache-2"
+}

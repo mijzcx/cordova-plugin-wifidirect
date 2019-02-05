@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<plugin xmlns="http://www.phonegap.com/ns/plugins/1.0"
+        id="com.mijzcx.cordova.plugin.wifidirect"
+        version="0.7.0">
+
+  <name>Mijzcx Wifi Direct</name>
+
+  <engines>
+    <engine name="cordova" version=">=3.4.0"/>
+  </engines>
+
+  <asset src="www/wifidirect.js" target="js/wifidirect.js"/>
+
+  <js-module src="www/wifidirect.js" name="wifidirect">
+    <clobbers target="wifidirect" />
+  </js-module>
+
+  <platform name="android">
+
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="WifiDirect">
+        <param name="android-package" value="com.mijzcx.cordova.plugin.WifiDirect"/>
+      </feature>
+    </config-file>
+
+    <source-file src="src/android/WifiDirect.java" target-dir="src/com/mijzcx/cordova/plugin/"/>
+
+    <config-file target="AndroidManifest.xml" parent="/manifest">
+      <uses-sdk android:minSdkVersion="14" />
+      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+      <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+      <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+      <uses-permission android:name="android.permission.INTERNET" />
+      <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+      <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    </config-file>
+  </platform>
+
+</plugin>
